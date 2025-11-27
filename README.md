@@ -1,2 +1,2 @@
-# firstPersonOfficeGame
-First Person Office Game
+#HtmlGameFirstPerson
+First Person Html Game
