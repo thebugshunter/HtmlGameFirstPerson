@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aperture Point - Prototype V2 (Movement & Interaction)</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: sans-serif;
+            background-color: rgba(0,0,0,0.5); /* Make text more readable */
+            padding: 5px;
+            z-index: 10;
+        }
+        #crosshair { /* Simple crosshair for aiming interaction */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 4px;
+            height: 4px;
+            background-color: rgb(0, 195, 255);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none; /* Don't let it interfere with clicks */
+            z-index: 11;
+            display: none; /* Hidden until pointer lock */
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Aperture Point Prototype V2 <br/> Click to Activate Controls (WASD=Move, Mouse=Look, E=Interact)</div>
+    <div id="crosshair"></div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+            }
+        }
+            
+    </script>
+    <script type="module">
+
+        import * as THREE from 'three';
+        // OrbitControls is no longer needed
+        // import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer;
+        let desk, monitor, meetingTable;
+        let nearbyBuilding1, nearbyBuilding2, nearbyBuilding3, nearbyBuilding4, nearbyBuilding5;
+        let floor; // Make floor accessible for potential collision
+        let drone; // Variable for our drone
+
+        // Movement variables
+        const moveSpeed = 3.0; // Units per second
+        const lookSpeed = 2.0;
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        let clock = new THREE.Clock(); // For delta time calculation
+
+        // Drone movement variables
+        let droneVelocity = new THREE.Vector3();
+        let droneTargetPosition = new THREE.Vector3();
+
+        // Mouse look variables
+        let euler = new THREE.Euler(0, 0, 0, 'YXZ'); // Use YXZ order for FPS controls
+        let vec = new THREE.Vector3();
+
+        // Interaction variables
+        let raycaster = new THREE.Raycaster();
+        let pointer = new THREE.Vector2(0, 0); // Center of screen
+        let interactableObjects = []; // Store objects we can interact with
+        let lookingAtObject = null; // Track object currently looked at
+
+        function init() {
+            // --- Basic Scene Setup ---
+            scene = new THREE.Scene();
+
+            // --- Camera ---
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 1.5, 0.5); // Start seated
+            // Camera rotation is now handled by mouse look, no initial lookAt needed here
+
+            // --- Renderer ---
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // --- Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(-5, 10, -10);
+            scene.add(directionalLight);
+
+            // --- Cityscape Background
+         //   const cubeTextureLoader = new THREE.CubeTextureLoader();
+        //   const skyboxTexture = cubeTextureLoader.load([
+          //     './textures/background.jpg', // Right (+X)
+          //     './textures/background.jpg', // Left (-X)
+          //     './textures/background.jpg', // Top (+Y)
+          //     './textures/background.jpg', // Bottom (-Y)
+          //     './textures/background.jpg', // Front (+Z)
+          //     './textures/background.jpg'  // Back (-Z)
+          // ]);
+           // scene.background = skyboxTexture;
+            //scene.background = new THREE.Color(0x00ff00); // Set to bright gree
+
+            // Use TextureLoader for a single background image
+           const textureLoader = new THREE.TextureLoader();
+            const backgroundTexture = textureLoader.load('./textures/background.jpg'); // Use forward slash
+            scene.background = backgroundTexture;
+            //scene.background = new THREE.Color(0xff0000); // Test with bright red
+
+
+            // --- Office Geometry (Placeholders - Add userData for interaction) ---
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x333344, side: THREE.DoubleSide });
+            const floorGeometry = new THREE.PlaneGeometry(20, 20);
+            floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = 0;
+            scene.add(floor);
+
+            // Add Walls and Windows
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x99ccee, transparent: true, opacity: 0.99 });
+            const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x99ccee, transparent: true, opacity: 0.6 }); // Glass-like
+
+            // Back Wall
+            const backWallGeometry = new THREE.BoxGeometry(20, 10, 0.2);
+            const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+            backWall.position.set(0, 1.5, -10);
+            scene.add(backWall);
+
+            // Front Wall with Door (simplified - no actual door)
+            const frontWallGeometry = new THREE.BoxGeometry(20, 10, 0.2);
+            const frontWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
+            frontWall.position.set(0, 1.5, 10);
+            scene.add(frontWall);
+            
+
+            // Left Wall with Window
+            const leftWallGeometry = new THREE.BoxGeometry(0.2, 10, 20);
+            const leftWall = new THREE.Mesh(leftWallGeometry, wallMaterial);
+            leftWall.position.set(-10, 1.5, 0);
+            scene.add(leftWall);
+
+            const leftWindowGeometry = new THREE.BoxGeometry(0.2, 2, 6);
+            const leftWindow = new THREE.Mesh(leftWindowGeometry, windowMaterial);
+            leftWindow.position.set(9.8, 2, 7);
+            scene.add(leftWindow);
+
+            // Right Wall with Window
+            const rightWallGeometry = new THREE.BoxGeometry(0.2, 10, 20);
+            const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
+            rightWall.position.set(10, 1.5, 0);
+            scene.add(rightWall);
+
+             const rightWindowGeometry = new THREE.BoxGeometry(0.2, 2, 8);
+             const rightWindow = new THREE.Mesh(rightWindowGeometry, windowMaterial);
+             rightWindow.position.set(-9, 2, -3);
+             scene.add(rightWindow);
+
+              // Make sure you have a textureLoader instance (you likely do from the background)
+            // const textureLoader = new THREE.TextureLoader(); // Reuse if already defined
+
+            const paintingTexture = textureLoader.load('./textures/image_fx - 2025-04-28T003053.589.jpg'); // <-- IMPORTANT: Change this to your painting image file!
+            const paintingMaterial = new THREE.MeshBasicMaterial({ map: paintingTexture, side: THREE.DoubleSide }); // Basic material, doesn't need complex lighting
+            const paintingGeometry = new THREE.PlaneGeometry(2, 1.5); // Width, Height of the painting
+            const paintingMesh = new THREE.Mesh(paintingGeometry, paintingMaterial);
+
+            paintingMesh.position.set(9.8, 1.8, 0); // Position it slightly in front of the right wall (wall is at x=10)
+            paintingMesh.rotation.y = -Math.PI / 2; // Rotate it to face inwards
+            scene.add(paintingMesh);
+
+
+            const deskMaterial = new THREE.MeshStandardMaterial({ color: 0x555566 });
+            const deskGeometry = new THREE.BoxGeometry(2.5, 0.9, 1); // Make desk slightly taller for collision
+            desk = new THREE.Mesh(deskGeometry, deskMaterial);
+            desk.position.set(0, 0.45, -0.8); // Adjust Y pos based on height/2
+            scene.add(desk);
+
+            const monitorMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x223344, emissiveIntensity: 0.5 });
+            const monitorGeometry = new THREE.BoxGeometry(1.2, 0.7, 0.05);
+            monitor = new THREE.Mesh(monitorGeometry, monitorMaterial);
+            monitor.position.set(0, 1.35, -1.2);
+            monitor.userData = { interactable: true, name: 'Computer Monitor' }; // Mark as interactable
+            interactableObjects.push(monitor); // Add to list for raycaster
+            scene.add(monitor);
+
+            const tableMaterial = new THREE.MeshStandardMaterial({ color: 0x666677 });
+            const tableGeometry = new THREE.BoxGeometry(3, 0.9, 1.5); // Make table slightly taller for collision
+            meetingTable = new THREE.Mesh(tableGeometry, tableMaterial);
+            meetingTable.position.set(0, 0.45, 3); // Adjust Y pos based on height/2
+            meetingTable.userData = { interactable: true, name: 'Meeting Table' }; // Also make table interactable
+            interactableObjects.push(meetingTable);
+            scene.add(meetingTable);
+
+            // --- Road ---
+           // const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 }); // Dark grey asphalt color
+            //  const roadGeometry = new THREE.PlaneGeometry(25, 1000); // Width, Length
+            //  const road = new THREE.Mesh(roadGeometry, roadMaterial);
+            //  road.rotation.x = -Math.PI / 2; // Lay it flat
+            //  road.position.y = 0.01; // Slightly above the floor to prevent z-fighting
+           //  scene.add(road);
+
+
+            // --- Random Nearby & Far Buildings ---
+            const buildingMaterial = new THREE.MeshStandardMaterial({ color: 0x888899 });
+            const numBuildings = 200;
+            const minDistance = 50; // Minimum distance from the office center (0,0)
+            const maxDistance = 500; // Maximum distance
+            const minSize = 15;
+            const maxSize = 60;
+            const minHeight = 50;
+            const maxHeight = 250;
+
+            for (let i = 0; i < numBuildings; i++) {
+                const width = THREE.MathUtils.randFloat(minSize, maxSize);
+                const depth = THREE.MathUtils.randFloat(minSize, maxSize);
+                const height = THREE.MathUtils.randFloat(minHeight, maxHeight);
+
+                const angle = Math.random() * Math.PI * 2; // Random angle
+                const distance = THREE.MathUtils.randFloat(minDistance, maxDistance); // Random distance
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+
+                const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+                const buildingMesh = new THREE.Mesh(buildingGeometry, buildingMaterial);
+                buildingMesh.position.set(x, height / 2, z); // Position base at y=0
+                scene.add(buildingMesh);
+            }
+            
+
+            // --- Drone ---
+            const droneBodyGeometry = new THREE.BoxGeometry(0.5, 0.2, 1);
+            const droneWingGeometry = new THREE.BoxGeometry(1.5, 0.05, 0.3);
+            const droneMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Red drone
+
+            drone = new THREE.Group(); // Use a group to combine parts
+            const droneBody = new THREE.Mesh(droneBodyGeometry, droneMaterial);
+            const droneWing1 = new THREE.Mesh(droneWingGeometry, droneMaterial);
+            droneWing1.position.set(0, 0, 0.3); // Position wings relative to body
+            const droneWing2 = new THREE.Mesh(droneWingGeometry, droneMaterial);
+            droneWing2.position.set(0, 0, -0.3);
+
+            drone.add(droneBody);
+            drone.add(droneWing1);
+            drone.add(droneWing2);
+
+            drone.position.set(15, 20, 15); // Initial position high up
+            scene.add(drone);
+
+            // --- Event Listeners for Controls & Interaction ---
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            // Pointer Lock activation
+            renderer.domElement.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+            document.addEventListener('pointerlockchange', onPointerLockChange, false);
+
+
+            // --- Start Animation Loop ---
+            animate();
+        }
+
+        // --- Event Handlers ---
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'ArrowDown':
+                case 'KeyS': moveForward = true; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = true; break;
+                case 'ArrowUp':
+                case 'KeyW': moveBackward = true; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = true; break;
+                case 'KeyE': handleInteraction(); break; // Trigger interaction on E press
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'ArrowDown':
+                case 'KeyS': moveForward = false; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = false; break;
+                case 'ArrowUp':
+                case 'KeyW': moveBackward = false; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = false; break;
+            }
+        }
+
+        function onMouseMove(event) {
+            if (document.pointerLockElement === document.body) {
+                euler.setFromQuaternion(camera.quaternion);
+
+                euler.y -= event.movementX * 0.001 * lookSpeed;
+                euler.x -= event.movementY * 0.001 * lookSpeed;
+
+                // Clamp vertical rotation to prevent camera flipping
+                euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+
+                camera.quaternion.setFromEuler(euler);
+            }
+        }
+
+        function onPointerLockChange() {
+             const crosshair = document.getElementById('crosshair');
+             const info = document.getElementById('info');
+            if (document.pointerLockElement === document.body) {
+                console.log('Pointer Locked');
+                crosshair.style.display = 'block'; // Show crosshair
+                info.style.display = 'none'; // Hide instructions
+            } else {
+                console.log('Pointer Unlocked');
+                 // Show instructions again when unlocked
+                crosshair.style.display = 'none';
+                info.style.display = 'block';
+                // Optional: Reset movement state if needed when pointer unlocks
+                moveForward = moveBackward = moveLeft = moveRight = false;
+            }
+        }
+
+        function handleInteraction() {
+            if (lookingAtObject && lookingAtObject.userData.interactable) {
+                console.log(`Interacted with: ${lookingAtObject.userData.name}`);
+                // --- NEXT STEP: Trigger actual game logic here ---
+                // Example: If (lookingAtObject === monitor) { showComputerInterface(); }
+                // Example: If (lookingAtObject === meetingTable) { playHologram(); }
+                 if (lookingAtObject === monitor) {
+                    alert("You used the computer!"); // Simple placeholder feedback
+                 } else if (lookingAtObject === meetingTable) {
+                     alert("You examined the meeting table.");
+                 }
+            } else {
+                 console.log("Interacted with nothing.");
+            }
+        }
+
+        function checkInteractionRaycast() {
+            raycaster.setFromCamera(pointer, camera); // Ray from camera center
+            const intersects = raycaster.intersectObjects(interactableObjects);
+
+            if (intersects.length > 0) {
+                 // Check distance if needed: if (intersects[0].distance < MAX_INTERACT_DISTANCE) { ... }
+                if (lookingAtObject !== intersects[0].object) {
+                    // Player started looking at a new interactable object
+                     if (lookingAtObject) {
+                          // Optional: Reset visual state of previously looked-at object (e.g., outline)
+                     }
+                    lookingAtObject = intersects[0].object;
+                    console.log("Looking at:", lookingAtObject.userData.name);
+                    // Optional: Add visual feedback (e.g., outline effect)
+                     // document.getElementById('info').innerText = `Press E to interact with ${lookingAtObject.userData.name}`;
+                }
+            } else {
+                if (lookingAtObject) {
+                    // Player stopped looking at an interactable object
+                     console.log("Stopped looking at:", lookingAtObject.userData.name);
+                     // Optional: Reset visual state
+                     // document.getElementById('info').innerText = '';
+                }
+                lookingAtObject = null;
+            }
+        }
+
+        // --- Window Resize Handler (Same as before) ---
+         function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+         window.addEventListener('resize', onWindowResize, false);
+
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta(); // Get time since last frame
+
+            // --- Drone Movement ---
+            if (drone) {
+                // If drone is close to target, pick a new random target
+                if (drone.position.distanceTo(droneTargetPosition) < 5) {
+                    droneTargetPosition.set(
+                        THREE.MathUtils.randFloat(-150, 150), // Random X within a range
+                        THREE.MathUtils.randFloat(10, 80),   // Random Y (height)
+                        THREE.MathUtils.randFloat(-150, 150)  // Random Z within a range
+                    );
+                    // console.log("New drone target:", droneTargetPosition); // For debugging
+                }
+
+                // Gently steer towards the target position
+                const directionToTarget = droneTargetPosition.clone().sub(drone.position).normalize();
+                droneVelocity.add(directionToTarget.multiplyScalar(delta * 0.5)); // Acceleration towards target
+
+                // Apply damping/friction
+                droneVelocity.multiplyScalar(0.98);
+
+                // Limit speed
+                droneVelocity.clampLength(0, 5); // Max speed of 5 units/sec
+                drone.position.add(droneVelocity.clone().multiplyScalar(delta));
+            }
+
+             // Only move and interact if pointer is locked
+            if (document.pointerLockElement === document.body) {
+
+                // --- Handle Movement ---
+                velocity.x -= velocity.x * 10.0 * delta; // Damping
+                velocity.z -= velocity.z * 10.0 * delta;
+                vec.x = direction.x;
+                vec.y = 0;
+                vec.z = direction.z;
+                vec.normalize();
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize(); // Ensure consistent speed diagonally
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * moveSpeed * delta * 50; // Apply movement force
+                if (moveLeft || moveRight) velocity.x -= direction.x * moveSpeed * delta * 50;
+
+                // Calculate potential next position
+                const potentialPos = camera.position.clone();
+                potentialPos.x -= velocity.x * delta;
+                potentialPos.z -= velocity.z * delta;
+
+
+                // --- Basic Collision Detection (Example - Needs Refinement) ---
+                // Simple AABB (Axis-Aligned Bounding Box) check against desk & table
+                const playerRadius = 0.3; // Approximate player width/depth
+                const deskBB = new THREE.Box3().setFromObject(desk);
+                const tableBB = new THREE.Box3().setFromObject(meetingTable);
+
+                // Check potential X movement
+                const potentialXPos = camera.position.clone();
+                potentialXPos.x -= velocity.x * delta;
+                const playerBBX = new THREE.Box3().setFromCenterAndSize(potentialXPos, new THREE.Vector3(playerRadius*2, 1.8, playerRadius*2)); // Simple player bounding box
+
+                let collisionX = false;
+                if (playerBBX.intersectsBox(deskBB) || playerBBX.intersectsBox(tableBB)) {
+                    collisionX = true;
+                    velocity.x = 0; // Stop X movement on collision
+                }
+
+                 // Check potential Z movement
+                const potentialZPos = camera.position.clone();
+                potentialZPos.z -= velocity.z * delta;
+                const playerBBZ = new THREE.Box3().setFromCenterAndSize(potentialZPos, new THREE.Vector3(playerRadius*2, 1.8, playerRadius*2));
+
+                 let collisionZ = false;
+                 if (playerBBZ.intersectsBox(deskBB) || playerBBZ.intersectsBox(tableBB)) {
+                    collisionZ = true;
+                    velocity.z = 0; // Stop Z movement on collision
+                 }
+
+                 // Apply movement if no collision on that axis
+                 if (!collisionX) camera.translateX(-velocity.x * delta);
+                 if (!collisionZ) camera.translateZ(-velocity.z * delta);
+
+                 // Keep player at fixed height (simple way, no jumping)
+                 camera.position.y = 1.5;
+
+                 // --- Handle Interaction Raycast ---
+                 checkInteractionRaycast();
+
+             } else {
+                 // Optional: Slow down velocity quickly if pointer isn't locked
+                 velocity.multiplyScalar(0.9);
+             }
+
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Start the application ---
+        init();
+
+    </script>
+    <!-- Load the main script -->
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
