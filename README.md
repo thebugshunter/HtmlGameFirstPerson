@@ -1,2 +1,5 @@
 #HtmlGameFirstPerson
-First Person Html Game
+
+First Person Game with HTML, CSS & JS
+
+
